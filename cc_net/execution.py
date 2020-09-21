@@ -1,10 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
-
 import itertools
 import multiprocessing
 import os
@@ -35,91 +28,11 @@ def get_executor(
     options.update(
         {kv.split("=", 1)[0]: kv.split("=", 1)[1] for kv in execution.split(",")[1:]}
     )
-    if execution_mode == "slurm":
-        ex = get_submitit_executor(
-            name, log_dir, timeout_hour, mem_gb, cpus, task_parallelism, options
-        )
-        if ex is not None:
-            return ex
 
     if execution_mode == "mp":
         return MpExecutor(log_dir, cpus, task_parallelism)
 
     return debug_executor
-
-
-def get_submitit_executor(
-    name: str,
-    log_dir: Path,
-    timeout_hour: int,
-    mem_gb: int,
-    cpus: int,
-    task_parallelism: int,
-    options: dict,
-) -> Optional[Executor]:
-    try:
-        import submitit
-
-        ex = submitit.AutoExecutor(log_dir)
-    except ImportError:
-        warnings.warn(f"Failed to import submitit, will try another executor.")
-        return None
-    except RuntimeError as e:
-        warnings.warn(
-            f"Failed to create submitit.AutoExecutor, will try another executor. ({e})"
-        )
-        return None
-
-    class SubmititRetryOnTimeout(submitit.helpers.Checkpointable):
-        def __init__(self, fn: Callable):
-            self.fn = fn
-
-        def __call__(self, *args, **kwargs):
-            return self.fn(*args, **kwargs)
-
-    ex.update_parameters(
-        name=name,
-        timeout_min=timeout_hour * 60,
-        mem_gb=mem_gb,
-        cpus_per_task=cpus,
-        array_parallelism=task_parallelism,
-        **options,
-    )
-
-    def submit_and_wait(function: Callable[..., Optional[str]], *args: Iterable):
-        f_name = function.__name__
-
-        assert len(args) > 0, f"No arguments passed to {f_name}"
-        approx_length = _approx_length(*args)
-
-        print(f"Submitting {f_name} in a job array ({approx_length} jobs)")
-        jobs = ex.map_array(function, *args)
-        failed_jobs = []
-        done = 0
-        total = len(jobs)
-        job_array_id = jobs[0].job_id.split("_")[0]
-        print(f"Started {f_name} in job array {job_array_id} ({len(jobs)} jobs).")
-        for job in submitit.helpers.as_completed(jobs):
-            done += 1
-            print(f"Finished job {job.job_id} ({done} / {total}).")
-            e = job.exception()
-            if not e:
-                continue
-
-            print(f"Failed job {job.job_id}:", e)
-            failed_jobs.append(job)
-
-        if failed_jobs:
-            n_failures = 10
-            message = f"{len(failed_jobs)} / {done} jobs failed while running {f_name}"
-            print(message)
-            for job in failed_jobs[:n_failures]:
-                print(f"Failed {job.job_id} -> {job.paths.stderr}")
-            if len(failed_jobs) > n_failures:
-                print(f"... ({len(failed_jobs) - n_failures} failed job skipped)")
-            raise Exception(message)
-
-    return submit_and_wait
 
 
 def debug_executor(function: Callable[..., Optional[str]], *args: Iterable):

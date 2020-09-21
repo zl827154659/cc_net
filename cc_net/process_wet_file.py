@@ -8,18 +8,18 @@
 import logging
 import re
 import time
+import os
 import urllib.request
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
 from urllib.parse import urlparse
-
 import func_argparse
 from bs4 import BeautifulSoup
 
 from cc_net import jsonql
 
 WET_URL_ROOT = "https://commoncrawl.s3.amazonaws.com"
-
+data_dir = os.path.abspath(os.path.join(os.getcwd(), "../..", "CommonCrawl"))
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +55,12 @@ WARC-Block-Digest: sha1:S3DTWCONT2L6ORTGCY2KXEZ37LNBB7V2
 Content-Type: text/plain
 Content-Length: 7743
     """
+
     if not headers or not doc:
         return None
 
     try:
+        """
         warc_type = headers[1].split()[1]
         if warc_type != "conversion":
             return None
@@ -66,6 +68,29 @@ Content-Length: 7743
         date = headers[3].split()[1]
         digest = headers[6].split()[1]
         length = int(headers[8].split()[1])
+        
+        """
+
+        url = ""
+        date = ""
+        digest = ""
+        length = 0
+        for header in headers:
+            mapping = header.split(":")
+            if len(mapping) > 1:
+                key = mapping[0]
+                value = mapping[1]
+                if key == "WARC-Type:":
+                    if value == "conversion":
+                        return None
+                elif key == "WARC-Target-URI:":
+                    url = value
+                elif key == "WARC-Date:":
+                    date = value
+                elif key == "WARC-Block-Digest:":
+                    digest = value
+                elif key == "Content-Length:":
+                    length = value
     except Exception as e:
         logger.warning("Can't parse header:", e, headers, doc)
         return None
@@ -156,7 +181,7 @@ class CCShardReader(Iterable[dict]):
         num_segments_per_shard: int = -1,
         min_len: int = 0,
     ):
-        """Downloads a shard of Common Crawl, and yields dict.
+        """Get a shard of Common Crawl from disk, and yields dict.
 
         Arguments:
             dump: CC dump id
@@ -176,7 +201,8 @@ class CCShardReader(Iterable[dict]):
     def segments(self) -> List[str]:
         if self._segments:
             return self._segments
-        segments_file = cc_segments_url(self.dump)
+        # code by ray : change the source of wet.paths.gz to local disk
+        segments_file = os.path.join(data_dir, self.dump + "wet.paths.gz")
         with jsonql.smart_open(segments_file) as f:
             segments = [segment.strip() for segment in f]
         n = len(segments)
@@ -195,7 +221,11 @@ class CCShardReader(Iterable[dict]):
         for i, segment in enumerate(self.segments):
             start = time.time()
             # TODO: start downloading the next segment in the background
-            with jsonql.open_remote_file(self.segment_url(segment)) as f:
+            # code by ray : split the file path from wet.path.gz and get the
+            # segment file from local disk rather than remote url
+            segment = segment.split("/")[-1]
+            segment_file = os.path.join(data_dir, self.dump, segment)
+            with jsonql.smart_open(segment_file) as f:
                 for doc in parse_warc_file(iter(f), self.min_len):
                     doc["cc_segment"] = segment
                     yield doc
@@ -210,4 +240,11 @@ class CCShardReader(Iterable[dict]):
 
 
 if __name__ == "__main__":
-    func_argparse.main(ls, dl)
+    dump = '2020-24'
+    shard = 0
+    num_shards = 1
+    num_segments_per_shard = 1
+    min_len = 300
+    ccshrad = CCShardReader(dump, shard, num_shards, num_segments_per_shard, min_len)
+    print(ccshrad.segments)
+    # print(data_dir)

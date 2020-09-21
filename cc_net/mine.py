@@ -1,15 +1,5 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-#
-
 """
-Main script to download a CC dump, remove duplicates, split by language and
-filter the documents.
-
-The pipeline parameters are described in the `Config` class.
+process file from disk and remove duplicates, filter the documents
 """
 
 import hashlib
@@ -27,12 +17,13 @@ import func_argparse
 
 # Local scripts
 from cc_net import dedup, execution, jsonql, perplexity, process_wet_file
+
 from cc_net import regroup as regroup_module
 from cc_net import split_by_lang
 from cc_net.execution import Executor
 
 # Constant
-CUTOFF_CSV = Path(__file__).parent / "data" / "cutoff.csv"
+CUTOFF_CSV = Path() / "data" / "cutoff.csv"
 
 
 class Config(NamedTuple):
@@ -62,20 +53,19 @@ class Config(NamedTuple):
     """
 
     config_name: str = "base"
-    dump: str = "2017-51"
+    dump: str = "2020-24"
     output_dir: Path = Path("data")
-    execution: str = "slurm"
+    execution: str = "mp"
     num_shards: int = 1600
     num_segments_per_shard: int = -1
     min_len: int = 300
     hash_in_mem: int = 50
-    lang_whitelist: Sequence[str] = []
+    lang_whitelist: Sequence[str] = ["zh"]
     lang_blacklist: Sequence[str] = []
     lang_threshold: float = 0.5
     lm_dir: Path = Path("data/lm_sp")
-    cutoff: Path = CUTOFF_CSV
-    lm_languages: Optional[Sequence[str]] = None
-    mine_num_processes: int = 16
+    lm_languages: Optional[Sequence[str]] = ["zh"]
+    mine_num_processes: int = 10
     target_size: str = "4G"
     cleanup_after_regroup: bool = True
     task_parallelism: int = 500
@@ -96,6 +86,7 @@ class Config(NamedTuple):
             task_parallelism=self.task_parallelism,
         )
 
+    # get segments path list of a shard, which is saved in CCShardReader.segments
     def get_cc_shard(self, shard: int) -> process_wet_file.CCShardReader:
         return process_wet_file.CCShardReader(
             self.dump,
@@ -147,7 +138,7 @@ TEST_CONFIG = BASE_CONFIG._replace(
     num_segments_per_shard=1,
     hash_in_mem=2,
     mine_num_processes=2,
-    lang_whitelist=["de", "it", "fr"],
+    lang_whitelist=["zh"],
     target_size="32M",
     cleanup_after_regroup=False,
 )
@@ -254,6 +245,7 @@ def mine(conf: Config) -> List[Path]:
         return outputs
 
     # Compute hashes firsts.
+    # note by ray : this is used for group every 'hash_in_mem number' of hashed_files(e.g. 0000.bim)
     hashes_groups = list(jsonql.grouper(hashes(conf), conf.hash_in_mem))
 
     mined_dir.mkdir(parents=True, exist_ok=True)
